@@ -18,21 +18,43 @@ NARANJA_FDV = "#E67E22"
 VERDE_ACTIVO = "#28a745"
 AMARILLO_MAPA = "#FFB300"
 
-# CSS Personalizado
+# Logo y CSS Personalizado
+LOGO_URL = "https://coordinadoraongd.org/wp-content/uploads/2016/04/fundacion_del_valle.jpg"
+
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #FFFFFF; }}
+    /* Logo arriba a la derecha */
+    .logo-container {{
+        position: absolute;
+        top: -50px;
+        right: 0px;
+        z-index: 1000;
+    }}
+    .logo-img {{
+        width: 180px;
+    }}
     h1, h2, h3 {{ color: {AZUL_FDV} !important; font-family: 'Arial'; }}
     .stMetric {{ background-color: #F8F9FA; padding: 15px; border-radius: 10px; border-left: 5px solid {NARANJA_FDV}; }}
     .ficha-box {{ border: 1px solid #DDD; padding: 20px; border-radius: 10px; margin-bottom: 20px; background-color: #FAFAFA; }}
     </style>
+    <div class="logo-container">
+        <img src="{LOGO_URL}" class="logo-img">
+    </div>
     """, unsafe_allow_html=True)
 
 def fmt_euro(valor):
     try:
+        # Formato: 1.234.567 €
         return f"{int(round(float(valor))):,.0f}".replace(",", ".") + " €"
     except:
         return "0 €"
+
+def fmt_numero(valor):
+    try:
+        return f"{int(valor):,.0f}".replace(",", ".")
+    except:
+        return "0"
 
 # --- 2. CARGA DE DATOS ---
 @st.cache_data
@@ -97,29 +119,58 @@ if not df.empty:
     m1.metric("Proyectos", f"{len(df_f)}")
     m2.metric("Subvención", fmt_euro(df_f['SUBVENCIÓN'].sum()))
     m3.metric("Coste Total", fmt_euro(df_f['COSTE TOTAL'].sum()))
-    m4.metric("Ben. Directos", f"{int(df_f['B. Directos (Nº)'].sum()):,.0f}".replace(",", "."))
-    m5.metric("Ben. Indirectos", f"{int(df_f['B. Indirectos (Nº)'].sum()):,.0f}".replace(",", "."))
+    m4.metric("Ben. Directos", fmt_numero(df_f['B. Directos (Nº)'].sum()))
+    m5.metric("Ben. Indirectos", fmt_numero(df_f['B. Indirectos (Nº)'].sum()))
 
     st.divider()
     
-    # Mapa
+    # --- MAPA CON HOVER PERSONALIZADO ---
     st.subheader("📍 Presencia Institucional Global")
-    df_mapa = df_f.groupby("PAIS").agg({"SUBVENCIÓN":"sum", "B. Directos (Nº)":"sum", "Estado":"first"}).reset_index()
-    df_mapa["Subv_T"] = df_mapa["SUBVENCIÓN"].apply(fmt_euro)
-    df_mapa["Ben_T"] = df_mapa["B. Directos (Nº)"].apply(lambda x: f"{int(x):,.0f}".replace(",", "."))
+    df_mapa = df_f.groupby("PAIS").agg({
+        "SUBVENCIÓN": "sum", 
+        "B. Directos (Nº)": "sum", 
+        "Estado": "first"
+    }).reset_index()
 
-    fig_map = px.choropleth(df_mapa, locations="PAIS", locationmode='country names', color="Estado",
-                           color_discrete_map={"Activo": VERDE_ACTIVO, "Histórico": AMARILLO_MAPA}, projection="natural earth")
-    fig_dots = px.scatter_geo(df_mapa, locations="PAIS", locationmode='country names', size="SUBVENCIÓN",
-                             hover_name="PAIS", custom_data=["Ben_T", "Subv_T"], size_max=30)
-    fig_dots.update_traces(marker=dict(color=AZUL_FDV, opacity=0.6))
+    # Preparar etiquetas para el mapa
+    df_mapa["Importe_Etiqueta"] = df_mapa["SUBVENCIÓN"].apply(fmt_euro)
+    df_mapa["Ben_Etiqueta"] = df_mapa["B. Directos (Nº)"].apply(fmt_numero)
+
+    fig_map = px.choropleth(
+        df_mapa, 
+        locations="PAIS", 
+        locationmode='country names', 
+        color="Estado",
+        color_discrete_map={"Activo": VERDE_ACTIVO, "Histórico": AMARILLO_MAPA}, 
+        projection="natural earth"
+    )
+
+    fig_dots = px.scatter_geo(
+        df_mapa, 
+        locations="PAIS", 
+        locationmode='country names', 
+        size="SUBVENCIÓN",
+        hover_name="PAIS", 
+        custom_data=["Importe_Etiqueta", "Ben_Etiqueta"], 
+        size_max=30
+    )
+
+    # Configuración del cursor (Hover)
+    fig_dots.update_traces(
+        hovertemplate="<b>%{hovertext}</b><br>" +
+                      "Importe: %{customdata[0]}<br>" +
+                      "Total Beneficiarios Directos: %{customdata[1]}<extra></extra>",
+        marker=dict(color=AZUL_FDV, opacity=0.7)
+    )
+
     fig_map.add_trace(fig_dots.data[0])
-    fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
+    fig_map.update_geos(showcountries=True, countrycolor="white")
+    fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600, showlegend=False)
     st.plotly_chart(fig_map, use_container_width=True)
 
     st.divider()
 
-    # --- GRÁFICAS DE SECTORES (RESTAURADAS) ---
+    # Gráficas de Sectores
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("👥 Beneficiarios por Sector")
@@ -138,9 +189,8 @@ if not df.empty:
 
     st.divider()
     
-    # --- 5. FICHA DEL PROYECTO (MULTISELECCIÓN Y DESCARGA) ---
+    # --- GENERADOR DE FICHAS ---
     st.subheader("📋 Generador de Fichas de Proyecto")
-    
     proyectos_opciones = sorted([str(x) for x in df_f["Título"].unique() if str(x) != ''])
     seleccionados = st.multiselect("Selecciona proyectos para visualizar y descargar:", proyectos_opciones)
 
@@ -149,12 +199,9 @@ if not df.empty:
             doc = Document()
             for idx, titulo in enumerate(lista_titulos):
                 p = dataframe[dataframe["Título"] == titulo].iloc[0]
-                
-                # Título
                 t = doc.add_heading(str(p['Título']).upper(), 0)
                 t.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 
-                # Tabla de datos
                 table = doc.add_table(rows=3, cols=2)
                 table.style = 'Table Grid'
                 def fill_cell(r, c, label, value):
@@ -168,7 +215,7 @@ if not df.empty:
                 fill_cell(0, 1, "AÑO", int(p['Año_Num']))
                 fill_cell(1, 0, "SOCIO", p['SOCIO LOCAL/CONTRAPARTE 1'])
                 fill_cell(1, 1, "FINANCIACIÓN", fmt_euro(p['SUBVENCIÓN']))
-                fill_cell(2, 0, "BENEFICIARIOS", f"{int(p['B. Directos (Nº)'])} Directos")
+                fill_cell(2, 0, "BENEFICIARIOS", f"{fmt_numero(p['B. Directos (Nº)'])} Directos")
                 fill_cell(2, 1, "FINANCIADOR", p['Financiador'])
 
                 doc.add_paragraph("\n")
@@ -186,7 +233,7 @@ if not df.empty:
             return buf
 
         st.download_button(
-            label=f"📥 Descargar {len(seleccionados)} proyectos en Word (Página por proyecto)",
+            label=f"📥 Descargar {len(seleccionados)} proyectos en Word",
             data=crear_word_pro(seleccionados, df_f),
             file_name=f"Fichas_Tecnicas_FDV.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -198,13 +245,11 @@ if not df.empty:
                 <h3>{p['Título']}</h3>
                 <p><b>📍 País:</b> {p['PAIS']} | <b>📅 Año:</b> {int(p['Año_Num'])}</p>
                 <p><b>🤝 Socio:</b> {p['SOCIO LOCAL/CONTRAPARTE 1']} | <b>💰 Financiador:</b> {p['Financiador']}</p>
-                <p><b>💶 Subvención:</b> {fmt_euro(p['SUBVENCIÓN'])} | <b>👥 Impacto:</b> {int(p['B. Directos (Nº)'])} Directos</p>
+                <p><b>💶 Subvención:</b> {fmt_euro(p['SUBVENCIÓN'])} | <b>👥 Impacto:</b> {fmt_numero(p['B. Directos (Nº)'])} Directos</p>
                 <hr>
                 <p><b>Objetivo General (OG):</b><br>{p.get('OBJETIVO GENERAL (OG)', 'N/A')}</p>
                 <p><b>Objetivo Específico (OE):</b><br>{p.get('OBJETIVO ESPECÍFICO (OE)', 'N/A')}</p>
             </div>""", unsafe_allow_html=True)
-    else:
-        st.info("Utiliza el buscador de arriba para elegir los proyectos que quieres ver o descargar.")
 
 else:
-    st.error("No se ha detectado el archivo de datos.")
+    st.error("Archivo de datos no encontrado.")
