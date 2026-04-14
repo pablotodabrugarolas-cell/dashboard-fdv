@@ -4,6 +4,8 @@ import plotly.express as px
 import os
 import warnings
 from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 from datetime import datetime
 
@@ -16,12 +18,13 @@ NARANJA_FDV = "#E67E22"
 VERDE_ACTIVO = "#28a745"
 AMARILLO_MAPA = "#FFB300"
 
-# CSS Limpio
+# CSS Personalizado
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #FFFFFF; }}
     h1, h2, h3 {{ color: {AZUL_FDV} !important; font-family: 'Arial'; }}
     .stMetric {{ background-color: #F8F9FA; padding: 15px; border-radius: 10px; border-left: 5px solid {NARANJA_FDV}; }}
+    .ficha-box {{ border: 1px solid #DDD; padding: 20px; border-radius: 10px; margin-bottom: 20px; background-color: #FAFAFA; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -36,18 +39,16 @@ def fmt_euro(valor):
 def load_data():
     folder = os.path.dirname(os.path.abspath(__file__))
     target = os.path.join(folder, "datos.csv.xlsx")
-    if not os.path.exists(target): 
-        return pd.DataFrame()
+    if not os.path.exists(target): return pd.DataFrame()
     try:
-        # Intento leer CSV
         df = pd.read_csv(target, sep=",", skiprows=1, encoding='utf-8')
     except:
-        # Intento leer Excel
         df = pd.read_excel(target, skiprows=1)
     
     df.columns = [str(c).strip() for c in df.columns]
     
-    cols_txt = ["Sector 1", "PAIS", "SOCIO LOCAL/CONTRAPARTE 1", "Título"]
+    # Limpieza de textos y nulos
+    cols_txt = ["Sector 1", "PAIS", "SOCIO LOCAL/CONTRAPARTE 1", "Título", "Financiador"]
     for c in cols_txt:
         if c in df.columns:
             df[c] = df[c].fillna('').astype(str).replace(['nan', 'None', 'N/A'], '').str.strip()
@@ -73,21 +74,23 @@ def load_data():
 df = load_data()
 
 if not df.empty:
-    # --- 3. BARRA LATERAL ---
+    # --- 3. BARRA LATERAL (FILTROS) ---
     with st.sidebar:
-        st.header("🔍 Filtros")
+        st.header("🔍 Filtros Globales")
         st.markdown("---")
-        # Protección de tipos para evitar TypeError
         f_pais = st.multiselect("📍 País", sorted([str(x) for x in df["PAIS"].unique() if str(x) != '']))
         f_año = st.multiselect("📅 Año", sorted([int(x) for x in df["Año_Num"].unique() if x > 0], reverse=True))
         f_sector = st.multiselect("🎯 Sector", sorted([str(x) for x in df["Sector 1"].unique() if str(x) != '']))
         f_socio = st.multiselect("🤝 Socio Local", sorted([str(x) for x in df["SOCIO LOCAL/CONTRAPARTE 1"].unique() if str(x) != '']))
+        f_finan = st.multiselect("💰 Financiador", sorted([str(x) for x in df["Financiador"].unique() if str(x) != '']))
 
+    # Aplicar filtros al DataFrame
     df_f = df.copy()
     if f_pais: df_f = df_f[df_f["PAIS"].isin(f_pais)]
     if f_año: df_f = df_f[df_f["Año_Num"].isin(f_año)]
     if f_sector: df_f = df_f[df_f["Sector 1"].isin(f_sector)]
     if f_socio: df_f = df_f[df_f["SOCIO LOCAL/CONTRAPARTE 1"].isin(f_socio)]
+    if f_finan: df_f = df_f[df_f["Financiador"].isin(f_finan)]
 
     # --- 4. DASHBOARD ---
     st.title("🌍 Impacto Global - Fundación del Valle")
@@ -100,67 +103,98 @@ if not df.empty:
     m5.metric("Ben. Indirectos", f"{int(df_f['B. Indirectos (Nº)'].sum()):,.0f}".replace(",", "."))
 
     st.divider()
-    st.subheader("📍 Presencia Institucional Global")
     
+    # Mapa e Histogramas
+    st.subheader("📍 Análisis Geográfico e Inversión")
     df_mapa = df_f.groupby("PAIS").agg({"SUBVENCIÓN":"sum", "B. Directos (Nº)":"sum", "Estado":"first"}).reset_index()
     df_mapa["Subv_T"] = df_mapa["SUBVENCIÓN"].apply(fmt_euro)
     df_mapa["Ben_T"] = df_mapa["B. Directos (Nº)"].apply(lambda x: f"{int(x):,.0f}".replace(",", "."))
 
     fig_map = px.choropleth(df_mapa, locations="PAIS", locationmode='country names', color="Estado",
                            color_discrete_map={"Activo": VERDE_ACTIVO, "Histórico": AMARILLO_MAPA}, projection="natural earth")
-    
     fig_dots = px.scatter_geo(df_mapa, locations="PAIS", locationmode='country names', size="SUBVENCIÓN",
                              hover_name="PAIS", custom_data=["Ben_T", "Subv_T"], size_max=30)
-    
-    fig_dots.update_traces(hovertemplate="<b>%{hovertext}</b><br>Beneficiarios: %{customdata[0]}<br>Subvención: %{customdata[1]}<extra></extra>",
-                           marker=dict(color=AZUL_FDV, opacity=0.5))
-    
+    fig_dots.update_traces(marker=dict(color=AZUL_FDV, opacity=0.6))
     fig_map.add_trace(fig_dots.data[0])
-    fig_map.update_geos(showcountries=True, countrycolor="white", showocean=True, oceancolor="#D6EAF8")
-    fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600, showlegend=False)
+    fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
     st.plotly_chart(fig_map, use_container_width=True)
 
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("👥 Beneficiarios por Sector")
-        df_b = df_f.groupby("Sector 1")["B. Directos (Nº)"].sum().reset_index().sort_values("B. Directos (Nº)", ascending=True)
-        st.plotly_chart(px.bar(df_b, x="B. Directos (Nº)", y="Sector 1", orientation='h', color="Sector 1").update_layout(showlegend=False), use_container_width=True)
-    with c2:
-        st.subheader("🍩 Inversión por Sector")
-        df_p = df_f.groupby("Sector 1")["COSTE TOTAL"].sum().reset_index()
-        st.plotly_chart(px.pie(df_p, values="COSTE TOTAL", names="Sector 1", hole=0.5), use_container_width=True)
-
-    st.divider()
     
-    # --- FICHA DE PROYECTO ---
-    proy_l = sorted([str(x) for x in df_f["Título"].unique() if str(x) != ''])
-    if proy_l:
-        p_sel = st.selectbox("📋 Ficha del Proyecto:", proy_l)
-        p = df_f[df_f["Título"] == p_sel].iloc[0]
+    # --- 5. FICHA DEL PROYECTO (MULTISELECCIÓN Y DESCARGA) ---
+    st.subheader("📋 Generador de Fichas de Proyecto")
+    
+    proyectos_opciones = sorted([str(x) for x in df_f["Título"].unique() if str(x) != ''])
+    seleccionados = st.multiselect("Selecciona uno o varios proyectos para visualizar y descargar:", proyectos_opciones)
 
-        def get_word(d):
+    if seleccionados:
+        def crear_word_pro(lista_titulos, dataframe):
             doc = Document()
-            doc.add_heading(str(d['Título']), 0)
-            doc.add_paragraph(f"País: {d['PAIS']} | Año: {int(d['Año_Num'])}")
-            doc.add_paragraph(f"Subvención: {fmt_euro(d['SUBVENCIÓN'])}")
+            for idx, titulo in enumerate(lista_titulos):
+                p = dataframe[dataframe["Título"] == titulo].iloc[0]
+                
+                # Encabezado chulo
+                titulo_p = doc.add_heading(str(p['Título']).upper(), 0)
+                titulo_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # Datos clave en tabla oculta
+                table = doc.add_table(rows=3, cols=2)
+                table.style = 'Table Grid'
+                
+                def fill_cell(r, c, label, value):
+                    cell = table.cell(r, c)
+                    run = cell.paragraphs[0].add_run(f"{label}: ")
+                    run.bold = True
+                    cell.paragraphs[0].add_run(str(value))
+
+                fill_cell(0, 0, "PAÍS", p['PAIS'])
+                fill_cell(0, 1, "AÑO", int(p['Año_Num']))
+                fill_cell(1, 0, "SOCIO", p['SOCIO LOCAL/CONTRAPARTE 1'])
+                fill_cell(1, 1, "FINANCIACIÓN", fmt_euro(p['SUBVENCIÓN']))
+                fill_cell(2, 0, "BENEFICIARIOS", f"{int(p['B. Directos (Nº)'])} Directos")
+                fill_cell(2, 1, "FINANCIADOR", p['Financiador'])
+
+                doc.add_paragraph("\n")
+                
+                # Objetivos
+                og_h = doc.add_heading("OBJETIVO GENERAL (OG)", level=1)
+                doc.add_paragraph(str(p.get('OBJETIVO GENERAL (OG)', 'N/A')))
+                
+                oe_h = doc.add_heading("OBJETIVO ESPECÍFICO (OE)", level=1)
+                doc.add_paragraph(str(p.get('OBJETIVO ESPECÍFICO (OE)', 'N/A')))
+
+                # Salto de página si no es el último
+                if idx < len(lista_titulos) - 1:
+                    doc.add_page_break()
+            
             buf = BytesIO()
             doc.save(buf)
             buf.seek(0)
             return buf
 
-        st.download_button("📄 Descargar Word", data=get_word(p), file_name=f"{p_sel}.docx")
-        st.markdown(f"### {p['Título']}")
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write(f"**📍 País:** {p['PAIS']} | **📅 Año:** {int(p['Año_Num'])}")
-            st.write(f"**🤝 Socio:** {p['SOCIO LOCAL/CONTRAPARTE 1']}")
-        with col_b:
-            st.write(f"**💰 Financiación:** {fmt_euro(p['SUBVENCIÓN'])}")
-            st.write(f"**👥 Impacto:** {int(p['B. Directos (Nº)'])} Directos")
-        
-        st.info(f"**Objetivo General (OG):**\n\n{p.get('OBJETIVO GENERAL (OG)', 'N/A')}")
-        st.warning(f"**Objetivo Específico (OE):**\n\n{p.get('OBJETIVO ESPECÍFICO (OE)', 'N/A')}")
+        # Botón de descarga
+        st.download_button(
+            label=f"📥 Descargar {len(seleccionados)} fichas en un solo Word",
+            data=crear_word_pro(seleccionados, df_f),
+            file_name=f"Fichas_FDV_{datetime.now().strftime('%Y%m%d')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+        # Visualización en pantalla
+        for proy in seleccionados:
+            p = df_f[df_f["Título"] == proy].iloc[0]
+            with st.container():
+                st.markdown(f"""<div class="ficha-box">
+                    <h3>{p['Título']}</h3>
+                    <p><b>📍 País:</b> {p['PAIS']} | <b>📅 Año:</b> {int(p['Año_Num'])}</p>
+                    <p><b>🤝 Socio:</b> {p['SOCIO LOCAL/CONTRAPARTE 1']} | <b>💰 Financiador:</b> {p['Financiador']}</p>
+                    <p><b>💶 Subvención:</b> {fmt_euro(p['SUBVENCIÓN'])} | <b>👥 Impacto:</b> {int(p['B. Directos (Nº)'])} Directos</p>
+                    <hr>
+                    <p><b>Objetivo General (OG):</b><br>{p.get('OBJETIVO GENERAL (OG)', 'N/A')}</p>
+                    <p><b>Objetivo Específico (OE):</b><br>{p.get('OBJETIVO ESPECÍFICO (OE)', 'N/A')}</p>
+                </div>""", unsafe_allow_html=True)
+    else:
+        st.info("Selecciona proyectos arriba para generar las fichas.")
+
 else:
-    st.error("No se han encontrado datos. Verifica el archivo 'datos.csv.xlsx'.")
+    st.error("Error: No se ha podido cargar el archivo 'datos.csv.xlsx'. Comprueba el nombre del archivo en GitHub.")
