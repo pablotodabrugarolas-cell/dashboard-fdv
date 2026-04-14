@@ -55,26 +55,30 @@ def load_data():
             df[n] = pd.to_numeric(df[n], errors='coerce').fillna(0)
 
     df["Año_Num"] = pd.to_numeric(df["AÑO"], errors='coerce').fillna(0).astype(int)
-    df['FECHA_FIN_DT'] = pd.to_datetime(df['FIN'], errors='coerce')
-    hoy = pd.to_datetime(datetime.now().date())
-    
-    status_paises = df.groupby("PAIS")["FECHA_FIN_DT"].max().reset_index()
-    status_paises["Estado"] = status_paises["FECHA_FIN_DT"].apply(
-        lambda x: "Activo" if pd.notnull(x) and x >= hoy else "Histórico"
-    )
-    return df.merge(status_paises[["PAIS", "Estado"]], on="PAIS", how="left")
+    if 'FIN' in df.columns:
+        df['FECHA_FIN_DT'] = pd.to_datetime(df['FIN'], errors='coerce')
+        hoy = pd.to_datetime(datetime.now().date())
+        
+        status_paises = df.groupby("PAIS")["FECHA_FIN_DT"].max().reset_index()
+        status_paises["Estado"] = status_paises["FECHA_FIN_DT"].apply(
+            lambda x: "Activo" if pd.notnull(x) and x >= hoy else "Histórico"
+        )
+        df = df.merge(status_paises[["PAIS", "Estado"]], on="PAIS", how="left")
+    return df
 
 df = load_data()
 
 if not df.empty:
-    # --- 3. BARRA LATERAL ---
+    # --- 3. BARRA LATERAL (PROTECCIÓN CONTRA TYPEERROR) ---
     with st.sidebar:
         st.header("🔍 Filtros")
         st.markdown("---")
-        f_pais = st.multiselect("📍 País", sorted([x for x in df["PAIS"].unique() if x != '']))
+        
+        # Filtramos valores vacíos y convertimos a String para evitar errores de ordenación
+        f_pais = st.multiselect("📍 País", sorted([str(x) for x in df["PAIS"].unique() if x != '']))
         f_año = st.multiselect("📅 Año", sorted([int(x) for x in df["Año_Num"].unique() if x > 0], reverse=True))
-        f_sector = st.multiselect("🎯 Sector", sorted([x for x in df["Sector 1"].unique() if x != '']))
-        f_socio = st.multiselect("🤝 Socio Local", sorted([x for x in df["SOCIO LOCAL/CONTRAPARTE 1"].unique() if x != '']))
+        f_sector = st.multiselect("🎯 Sector", sorted([str(x) for x in df["Sector 1"].unique() if x != '']))
+        f_socio = st.multiselect("🤝 Socio Local", sorted([str(x) for x in df["SOCIO LOCAL/CONTRAPARTE 1"].unique() if x != '']))
 
     df_f = df.copy()
     if f_pais: df_f = df_f[df_f["PAIS"].isin(f_pais)]
@@ -85,15 +89,15 @@ if not df.empty:
     # --- 4. DASHBOARD ---
     st.title("🌍 Impacto Global - Fundación del Valle")
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Proyectos", f"{len(df)}")
-    m2.metric("Subvención", fmt_euro(df['SUBVENCIÓN'].sum()))
-    m3.metric("Coste Total", fmt_euro(df['COSTE TOTAL'].sum()))
-    m4.metric("Ben. Directos", f"{int(df['B. Directos (Nº)'].sum()):,.0f}".replace(",", "."))
-    m5.metric("Ben. Indirectos", f"{int(df['B. Indirectos (Nº)'].sum()):,.0f}".replace(",", "."))
+    m1.metric("Proyectos", f"{len(df_f)}")
+    m2.metric("Subvención", fmt_euro(df_f['SUBVENCIÓN'].sum()))
+    m3.metric("Coste Total", fmt_euro(df_f['COSTE TOTAL'].sum()))
+    m4.metric("Ben. Directos", f"{int(df_f['B. Directos (Nº)'].sum()):,.0f}".replace(",", "."))
+    m5.metric("Ben. Indirectos", f"{int(df_f['B. Indirectos (Nº)'].sum()):,.0f}".replace(",", "."))
 
     st.divider()
     st.subheader("📍 Presencia Institucional Global")
-    df_mapa = df.groupby("PAIS").agg({"SUBVENCIÓN":"sum", "B. Directos (Nº)":"sum", "Estado":"first"}).reset_index()
+    df_mapa = df_f.groupby("PAIS").agg({"SUBVENCIÓN":"sum", "B. Directos (Nº)":"sum", "Estado":"first"}).reset_index()
     df_mapa["Subv_T"] = df_mapa["SUBVENCIÓN"].apply(fmt_euro)
     df_mapa["Ben_T"] = df_mapa["B. Directos (Nº)"].apply(lambda x: f"{int(x):,.0f}".replace(",", "."))
 
@@ -106,28 +110,29 @@ if not df.empty:
     fig_map.add_trace(fig_dots.data[0])
     fig_map.update_geos(showcountries=True, countrycolor="white", showocean=True, oceancolor="#D6EAF8")
     fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600, showlegend=False)
-    st.plotly_chart(fig_map, width='stretch')
+    st.plotly_chart(fig_map, use_container_width=True)
 
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("👥 Beneficiarios por Sector")
         df_b = df_f.groupby("Sector 1")["B. Directos (Nº)"].sum().reset_index().sort_values("B. Directos (Nº)", ascending=True)
-        st.plotly_chart(px.bar(df_b, x="B. Directos (Nº)", y="Sector 1", orientation='h', color="Sector 1").update_layout(showlegend=False), width='stretch')
+        st.plotly_chart(px.bar(df_b, x="B. Directos (Nº)", y="Sector 1", orientation='h', color="Sector 1").update_layout(showlegend=False), use_container_width=True)
     with c2:
         st.subheader("🍩 Inversión por Sector")
         df_p = df_f.groupby("Sector 1")["COSTE TOTAL"].sum().reset_index()
-        st.plotly_chart(px.pie(df_p, values="COSTE TOTAL", names="Sector 1", hole=0.5), width='stretch')
+        st.plotly_chart(px.pie(df_p, values="COSTE TOTAL", names="Sector 1", hole=0.5), use_container_width=True)
 
     st.divider()
-    proy_l = sorted([x for x in df_f["Título"].unique() if x != ''])
+    # Ficha técnica
+    proy_l = sorted([str(x) for x in df_f["Título"].unique() if x != ''])
     if proy_l:
         p_sel = st.selectbox("📋 Ficha del Proyecto:", proy_l)
         p = df_f[df_f["Título"] == p_sel].iloc[0]
 
         def get_word(d):
             doc = Document()
-            doc.add_heading(d['Título'], 0)
+            doc.add_heading(str(d['Título']), 0)
             doc.add_paragraph(f"País: {d['PAIS']} | Año: {int(d['Año_Num'])}")
             doc.add_paragraph(f"Subvención: {fmt_euro(d['SUBVENCIÓN'])}")
             buf = BytesIO(); doc.save(buf); buf.seek(0); return buf
@@ -139,6 +144,10 @@ if not df.empty:
             st.write(f"**📍 País:** {p['PAIS']} | **📅 Año:** {int(p['Año_Num'])}")
             st.write(f"**🤝 Socio:** {p['SOCIO LOCAL/CONTRAPARTE 1']}")
         with col_b:
+            st.write(f"**💰 Financiación:** {fmt_euro(p['SUBVENCIÓN'])}")
+            st.write(f"**👥 Impacto:** {int(p['B. Directos (Nº)'])} Directos")
+        st.info(f"**Objetivo General (OG):**\n\n{p.get('OBJETIVO GENERAL (OG)', 'N/A')}")
+        st.warning(f"**Objetivo Específico (OE):**\n\n{p.get('OBJETIVO ESPECÍFICO (OE)', 'N/A')}")
             st.write(f"**💰 Financiación:** {fmt_euro(p['SUBVENCIÓN'])}")
             st.write(f"**👥 Impacto:** {int(p['B. Directos (Nº)'])} Directos")
         st.info(f"**Objetivo General (OG):**\n\n{p.get('OBJETIVO GENERAL (OG)', 'N/A')}")
